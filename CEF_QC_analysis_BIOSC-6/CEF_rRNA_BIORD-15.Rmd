@@ -1,0 +1,415 @@
+---
+title: "CEF antigen-activated CD8 cells"
+output:
+  html_notebook:
+    code_folding: hide
+    css: ~/Documents/common/utils/Rnotebook_style.css
+    theme: united
+    toc: yes
+    toc_float: no
+    urlcolor: blue
+  html_document:
+    code_folding: hide
+    css: ~/Documents/common/utils/Rnotebook_style.css
+    theme: united
+    toc: yes
+    toc_float: no
+    urlcolor: blue
+---
+```{r global_options, echo = FALSE, include = FALSE}
+knitr::opts_chunk$set(echo = T, warning = FALSE, message = FALSE,
+                      cache = FALSE, tidy = TRUE, size = "small")
+```
+
+
+# Introduction
+The CEF Control Peptides are 8-12 amino acids in length, with sequences derived from the human Cytomegalovirus, Epstein-Barr Virus and Influenza Virus. These peptides are used in the stimulation of IFNg release from CD8+ T cells in individuals with defined HLA types, they are useful in applications such as ELISPOT, intracellular cytokine and CTL assays.
+
+We've sorted CD8 T-cells reactive against CEF antigen. They have paired alpha and beta TCRs, and many are clonal (e.g. many cells with the same TCR recognizing the same antigen). We're still not sure the best way to present the gene expression profiles from these cells, but we thought:
+
+
+```{r}
+source("~/Documents/common/utils/dataIO.R")
+source("~/Documents/common/utils/tophelpers.R")
+source("~/Documents/common/utils/common_utils.R")
+
+df_cef_cellmeta <- read_csv("cef_metadata.csv") %>%
+  mutate(cell_id = gsub("-", "_", cell_id))
+
+df_gene_anno <- read_csv("~/Documents/common/resource//genome_anno/gene_symbol_GRCh38.csv") %>%
+  mutate(gene_id = ensembl_gene_id) %>%
+  select(gene_id, gene_symbol, gene_biotype, gene_gc_pct) %>%
+  filter(gene_biotype == "protein_coding") %>%
+  mutate(ribo = grepl("^RPS|^RPL", gene_symbol))
+
+# mat <- Seurat::Read10X_h5("data_nofilter//rsem_tpm_matrix.h5")
+mat <- Seurat::Read10X_h5("data/rsem_tpm_matrix.h5")
+
+df_gsec_gene <- data.table::melt(mat %>% as.matrix(), varnames = c("gene_symbol", "cell_id")) %>%
+  filter(value > 0) %>%
+  group_by(cell_id) %>%
+  mutate(rank = rank(-value, ties.method = "min"),
+         prop = value/sum(value))
+
+df_cef_meta <- df_gsec_gene %>%
+  left_join(df_cef_cellmeta) %>%
+  unite(exp, c(exp, suffix), sep = " ") %>% 
+  mutate(exp = ifelse(is.na(plate), "smsq3 benchmark", exp)) %>%
+  separate(plate, c("plate_row", "plate_col"), sep = 1) %>%
+  mutate(plate_row_half = ifelse(plate_row %in% c("A", "B", "C", "D"), "A-D", ifelse(is.na(plate_row), plate_row, "E-H")))
+
+head(df_cef_meta)
+```
+
+# With rRNA
+```{r}
+ggplot(df_cef_meta, aes(rank, prop, group = cell_id)) + 
+  geom_line(aes(color = plate_row_half)) +
+  scale_x_log10() +
+  facet_wrap(~exp) +
+  xlab("Rank of top abundant genes") + ylab("Proportion of total FPKMs") +
+  theme_custom()
+```
+
+```{r}
+ggplot(df_cef_meta %>% filter(prop > 0.01), aes(gene_symbol, prop)) + 
+  geom_point(aes(color = exp)) +
+  coord_flip() +
+  theme_bw() +
+  ylab("% TPM of the cell")
+```
+
+# Top expressed gene w/ rm_ribo
+```{r}
+ggplot(df_cef_meta, aes(rank, prop, group = cell_id)) + 
+  geom_line(aes(color = plate_row_half)) +
+  scale_x_log10() +
+  facet_wrap(~exp) +
+  xlab("Rank of top abundant genes") + ylab("Proportion of total TPMs") +
+  theme_custom()
+```
+```{r}
+ggplot(df_cef_meta %>% filter(rank < 5), aes(gene_symbol, prop)) + 
+  geom_point(aes(color = exp)) +
+  coord_flip() +
+  theme_bw() +
+  ylab("% TPM of the cell")
+```
+
+```{r}
+df_gene_anno <- read_csv("~/Documents/common/resource//genome_anno/gene_symbol_GRCh38.csv") %>%
+  mutate(gene_id = ensembl_gene_id) %>%
+  select(gene_id, gene_symbol, gene_biotype, gene_gc_pct)
+
+df_cef_cellmeta <- read_csv("cef_metadata.csv") %>%
+  mutate(cell_id = gsub("-", "_", cell_id)) %>%
+  filter(cell_id != "Undetermined_S0") %>%
+  unite(exp, c(exp, suffix), sep = " ") %>%
+  mutate(sample = cell_id) %>%
+  separate(plate, c("plate_row", "plate_col"), sep = 1) %>%
+  mutate(plate_row_half = ifelse(plate_row %in% c("A", "B", "C", "D"), "A-D", 
+                                 ifelse(is.na(plate_row), plate_row, "E-H"))) %>%
+  select(sample, exp, plate_row_half)
+      
+# mat <- Seurat::Read10X_h5("data_nofilter//rsem_tpm_matrix.h5")
+mat <- Seurat::Read10X_h5("data/rsem_tpm_matrix.h5")
+
+df_gsec_gene_rm <- data.table::melt(mat %>% as.matrix(), 
+                                    varnames = c("gene_symbol", "cell_id"),
+                                    value.name = "TPM") %>%
+  filter(TPM > 0) %>%
+  group_by(cell_id) %>%
+  mutate(rank = rank(-TPM, ties.method = "min"),
+         prop = TPM/sum(TPM)) %>%
+  left_join(df_cef_cellmeta, by = c("cell_id" = "sample") %>%
+  mutate(exp = ifelse(grepl("EXPHCA", cell_id), "Benchmark", exp)) %>%
+  left_join(df_gene_anno)
+
+
+
+```
+```{r}
+# group genes to functional categories based on 10x panel
+panel_10x_meta <- list(
+  cancer = "https://cf.10xgenomics.com/supp/targeted-exp/panel/pan_cancer_v1.0_GRCh38-2020-A.gene_metadata.tsv",
+  immune = "https://cf.10xgenomics.com/supp/targeted-exp/panel/immunology_v1.0_GRCh38-2020-A.gene_metadata.tsv",
+  pathway = "https://cf.10xgenomics.com/supp/targeted-exp/panel/gene_signature_v1.0_GRCh38-2020-A.gene_metadata.tsv"
+)
+panel_10x_genes <- plyr::ldply(panel_10x_meta, read_tsv, .id = "panel") %>%
+  select(panel, ensembl_id, gene_name) %>%
+  dplyr::rename(gene_symbol = gene_name) %>%
+  dcast(ensembl_id + gene_symbol ~ panel) %>%
+  mutate(panel_group = ifelse(!is.na(immune), "immune",
+                              ifelse(!is.na(pathway), "pathway", "cancer"))) %>%
+  select(ensembl_id, gene_symbol, panel_group)
+
+df_gsec_gene_rm_anno <- df_gsec_gene_rm %>%
+  filter(TPM > 0, !grepl("^FP\\d+", gene_symbol)) %>%
+  left_join(panel_10x_genes) %>%
+  mutate(panel_group = ifelse(is.na(panel_group), 
+                              ifelse(grepl("^RPS|^RPL|^MT-|MALAT1", gene_symbol), "Ribo/Mito/MALAT1", 
+                                     ifelse(grepl("protein_coding|IG.*gene", gene_biotype), 
+                                            "other protein-coding", "other noncoding")), 
+                              panel_group)) %>%
+  mutate(exp = gsub("21000| ", "_", exp)) %>%
+  group_by(gene_symbol, gene_biotype) %>%
+  mutate(gene_med_logTPM = median(log10(TPM +1))) %>%
+  group_by(gene_symbol, panel_group, gene_gc_pct, gene_med_logTPM, exp) %>%
+  summarise(med_logTPM = median(log10(TPM +1))) %>%
+  dcast(gene_symbol + panel_group + gene_gc_pct + gene_med_logTPM ~ exp, value.var = "med_logTPM", fill = 0)
+```
+
+```{r fig.width=8, fig.height=3}
+g1 <- ggplot(df_gsec_gene %>% filter(TPM > 0), aes(rank, log10(TPM + 1), group = sample)) + 
+  geom_line(aes(color = exp)) +
+  theme_bw() +
+  no_legend() +
+  ggtitle("TPM vs rank")
+
+g2 <- ggplot(df_gsec_gene_rm %>% filter(TPM > 0), aes(rank, log10(TPM + 1), group = sample)) + 
+  geom_line(aes(color = exp)) +
+  theme_bw() +
+  ggtitle("TPM vs rank, rRNA removed")
+
+grid.arrange(g1, g2, nrow = 1, widths = c(1, 1.2))
+```
+```{r fig.width=8, fig.height=2.5}
+g1 <- ggplot(df_gsec_gene_rm_anno %>% filter(EXP_052_LP356_P01 + Benchmark > 0, !grepl("other", panel_group)), 
+       aes(gene_med_logTPM, EXP_052_LP356_P01-Benchmark)) +
+  geom_point(aes(color = panel_group), alpha = 0.6) +
+  theme_bw() + no_legend() +
+  ggtitle("EXP_052_LP356_P01")
+
+g2 <- ggplot(df_gsec_gene_rm_anno %>% filter(EXP_052_LP356_P02 + Benchmark > 0, !grepl("other", panel_group)), 
+       aes(gene_med_logTPM, EXP_052_LP356_P02-Benchmark)) +
+  geom_point(aes(color = panel_group), alpha = 0.6) +
+  theme_bw() + no_legend() +
+  ggtitle("EXP_052_LP356_P02")
+
+g3 <- ggplot(df_gsec_gene_rm_anno %>% filter(EXP_210_LP169_P03 + Benchmark > 0, !grepl("other", panel_group)), 
+       aes(gene_med_logTPM, EXP_210_LP169_P03-Benchmark)) +
+  geom_point(aes(color = panel_group), alpha = 0.6) +
+  theme_bw() +
+  theme(legend.text = element_text(size = 14)) +
+  guides(color = guide_legend(override.aes = list(size = 6))) +
+  ggtitle("EXP_210_LP169_P03")
+
+grid.arrange(g1, g2, g3, nrow = 1, widths = c(1, 1, 1.3))
+```
+```{r fig.width=8, fig.height=2.5}
+g1 <- ggplot(df_gsec_gene_rm_anno %>% filter(EXP_052_LP356_P01 + Benchmark > 0, grepl("other", panel_group)), 
+       aes(gene_med_logTPM, EXP_052_LP356_P01-Benchmark)) +
+  geom_point(aes(color = panel_group), alpha = 0.6, size = 0.5) +
+  theme_bw() + no_legend() +
+  ggtitle("EXP_052_LP356_P01")
+
+g2 <- ggplot(df_gsec_gene_rm_anno %>% filter(EXP_052_LP356_P02 + Benchmark > 0, grepl("other", panel_group)), 
+       aes(gene_med_logTPM, EXP_052_LP356_P02-Benchmark)) +
+  geom_point(aes(color = panel_group), alpha = 0.6, size = 0.5) +
+  theme_bw() + no_legend() +
+  ggtitle("EXP_052_LP356_P02")
+
+g3 <- ggplot(df_gsec_gene_rm_anno %>% filter(EXP_210_LP169_P03 + Benchmark > 0, grepl("other", panel_group)), 
+       aes(gene_med_logTPM, EXP_210_LP169_P03-Benchmark)) +
+  geom_point(aes(color = panel_group), alpha = 0.6, size = 0.5) +
+  theme_bw() +
+  theme(legend.text = element_text(size = 14)) +
+  guides(color = guide_legend(override.aes = list(size = 6))) +
+  ggtitle("EXP_210_LP169_P03")
+
+grid.arrange(g1, g2, g3, nrow = 1, widths = c(1, 1, 1.3))
+```
+```{r fig.width=6, fig.height=3}
+df_gsec_gene_rm_anno %>% filter(EXP_052_LP356_P01 + Benchmark > 0) %>%
+         mutate(zero = ifelse(Benchmark == 0, "benchmark == 0", "benchmark > 0"),
+                panel_group = ifelse(panel_group %in% c("cancer", "immune", "pathway"), 
+                                     "Cancer/Immune/Pathway", panel_group)) %>%
+         group_by(panel_group, zero) %>%
+  mutate(gene_count = paste0(n(), " genes")) %>%
+  ggplot(aes(gene_med_logTPM, EXP_052_LP356_P01-Benchmark)) +
+  stat_bin_2d(bins = 60) + 
+  geom_hline(yintercept = 0, linetype = 2, size = 0.5) +
+  geom_text(data = . %>% select(panel_group, zero, gene_count) %>% unique(), aes(label = gene_count), x = 1, y = -3.5, size = 6) +
+  scale_fill_distiller(palette = "Spectral") +
+  facet_wrap(~panel_group + zero, nrow = 2) +
+  theme_bw() +
+  theme(strip.text.x = element_text(size = 16)) +
+  xlab("Gene expression level (median logTPM)") +
+  ylab("Enrichement: PACT-SMART over Benchmark (logFC)") +
+  ggtitle("EXP_052_LP356_P01 Enrichement: PACT-SMART over Benchmark")
+```
+
+## GC characteristics of newly-detected genes
+```{r fig.width=6, fig.height=3}
+gs <- df_gsec_gene_rm_anno %>% 
+  melt(measure = 7:9, variable.name = "experiment") %>%
+  plyr::dlply(plyr::.(experiment), function(df){
+    ggplot(df %>% filter(value + Benchmark > 0) %>%
+             mutate(zero = ifelse(Benchmark == 0, "benchmark == 0", "benchmark > 0"),
+                    panel_group = ifelse(panel_group %in% c("cancer", "immune", "pathway"), 
+                                         "Cancer/Immune/Pathway", panel_group)), 
+           aes(gene_gc_pct)) +
+      geom_density(aes(color = zero)) +
+      facet_wrap(~panel_group, nrow = 1) +
+      theme_bw() +
+      theme(strip.text.x = element_text(size = 12)) +
+      xlab("%GC per gene") +
+      ggtitle(df$experiment[1])
+  })
+
+
+grid.arrange(grobs = gs, nrow = 3)
+```
+
+
+## Gene expression grouped by gene biotype
+
+as a reference, Cellranger only map reads to protein coding and the VDJ segments types
+```{r}
+
+df_genetype_stat <- df_gsec_gene %>%
+  mutate(gene_biotype = ifelse(is.na(gene_biotype), "unknown", gene_biotype),
+         exp = ifelse(exp == "Benchmark", exp, "CEF PACT-SMART")) %>%
+  group_by(sample, exp, gene_biotype) %>%
+  summarise(total_TPM = sum(TPM),
+            n_genes = sum(TPM > 0)) %>%
+  group_by(gene_biotype) %>%
+  mutate(zero = max(total_TPM) == 0,
+         med_TPM = median(total_TPM),
+         med_ngenes = median(n_genes))
+```
+
+```{r fig.width=6, fig.height=3}
+
+g1 <- df_genetype_stat %>% 
+  filter(!zero) %>%
+  arrange(med_TPM) %>%
+  mutate(gene_biotype = factor(gene_biotype, levels = unique(.[["gene_biotype"]]))) %>%
+  ggplot(aes(gene_biotype, log10(total_TPM + 1))) +
+  geom_boxplot(aes(color = exp)) +
+  coord_flip() +
+  theme_bw() + no_legend() +
+  ggtitle("Total TPM by gene biotype")
+
+
+g2 <- df_genetype_stat %>% 
+  filter(!zero) %>%
+  arrange(n_genes) %>%
+  mutate(gene_biotype = factor(gene_biotype, levels = unique(.[["gene_biotype"]]))) %>%
+  ggplot(aes(gene_biotype, log10(n_genes + 1))) +
+  geom_boxplot(aes(color = exp)) +
+  coord_flip() +
+  theme_bw() +
+  ggtitle("Total number of genes detected by gene biotype")
+
+grid.arrange(g1, g2, nrow = 1, widths = c(1, 1.3))
+```
+
+And if we only focus on the major types (total TPM > 1000) This plot shows although PACT-SMART detect more genes than the benchmark globally, it detects less number of protein-coding genes. Therefore, the main gene detection gain comes from lncRNAs
+```{r fig.width=6, fig.height=3}
+
+g1 <- df_genetype_stat %>% 
+  filter(!zero, med_TPM > 1000) %>%
+  arrange(med_TPM) %>%
+  mutate(gene_biotype = factor(gene_biotype, levels = unique(.[["gene_biotype"]]))) %>%
+  ggplot(aes(gene_biotype, log10(total_TPM + 1))) +
+  geom_boxplot(aes(color = exp)) +
+  coord_flip() +
+  theme_bw() +
+  ggtitle("Total TPM by gene biotype")
+
+
+g2 <- df_genetype_stat %>% 
+  filter(!zero, med_TPM > 1000) %>%
+  arrange(n_genes) %>%
+  mutate(gene_biotype = factor(gene_biotype, levels = unique(.[["gene_biotype"]]))) %>%
+  ggplot(aes(gene_biotype, log10(n_genes + 1))) +
+  geom_boxplot(aes(color = exp)) +
+  coord_flip() +
+  theme_bw() +
+  ggtitle("Total number of genes detected by gene biotype")
+
+grid.arrange(g1, g2, nrow = 2)
+```
+```{r}
+df_genetype_stat_out <- df_gsec_gene %>%
+  mutate(gene_biotype = ifelse(is.na(gene_biotype), "unknown", gene_biotype)) %>%
+  group_by(exp, gene_symbol, gene_id, gene_biotype) %>%
+  summarise(median_TPM = median(TPM)) %>%
+  dcast(gene_id + gene_symbol + gene_biotype ~ exp, valur.var = "median_TPM")
+
+write_csv(df_genetype_stat_out, "median_TPM_by_dataset.csv")
+```
+
+## GC percent per gene
+```{r}
+df_gene_gc_stat <- rbind(
+  df_gsec_gene %>% 
+    mutate(gene_biotype = ifelse(is.na(gene_biotype), "unknown", gene_biotype)) %>%
+    group_by(sample, exp) %>%
+    summarise(weighted_gc = weighted.mean(gene_gc_pct, TPM, na.rm = T)) %>%
+    mutate(filter = "all_genes"),
+  df_gsec_gene_rm %>% 
+    mutate(gene_biotype = ifelse(is.na(gene_biotype), "unknown", gene_biotype)) %>%
+    group_by(sample, exp) %>%
+    summarise(weighted_gc = weighted.mean(gene_gc_pct, TPM, na.rm = T)) %>%
+    mutate(filter = "rRNA_removed")
+)
+
+top_genetypes <- df_genetype_stat %>% 
+  filter(!zero, med_TPM > 1000) %>%
+  select(gene_biotype) %>%
+  unique()
+
+df_gene_gc_stat_top_genetypes <- rbind(
+  df_gsec_gene %>% 
+    mutate(gene_biotype = ifelse(is.na(gene_biotype), "unknown", gene_biotype)) %>%
+    group_by(sample, exp, gene_biotype) %>%
+    summarise(total_TPM = sum(TPM, na.rm = T),
+              weighted_gc = weighted.mean(gene_gc_pct, TPM, na.rm = T)) %>%
+    group_by(sample, exp) %>%
+    mutate(TPM_frac = total_TPM/sum(total_TPM)) %>%
+    filter(gene_biotype %in% top_genetypes$gene_biotype) %>%
+    mutate(filter = "all_genes"),
+  df_gsec_gene_rm %>% 
+    mutate(gene_biotype = ifelse(is.na(gene_biotype), "unknown", gene_biotype)) %>%
+    group_by(sample, exp, gene_biotype) %>%
+    summarise(total_TPM = sum(TPM, na.rm = T),
+              weighted_gc = weighted.mean(gene_gc_pct, TPM, na.rm = T)) %>%
+    group_by(sample, exp) %>%
+    mutate(TPM_frac = total_TPM/sum(total_TPM)) %>%
+    filter(gene_biotype %in% top_genetypes$gene_biotype) %>%
+    mutate(filter = "rRNA_removed")
+)
+
+
+```
+```{r fig.width=6, fig.height=3.5}
+g1 <- df_gene_gc_stat_top_genetypes %>%
+  group_by(filter, exp, gene_biotype) %>%
+  summarise(TPM_frac = median(TPM_frac, na.rm = T)) %>%
+  ggplot(aes(exp, TPM_frac)) + 
+  geom_bar(stat = "identity", aes(fill = gene_biotype)) + 
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~filter) +
+  theme_custom() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+g2 <- ggplot(df_gene_gc_stat, aes(filter, weighted_gc)) +
+  geom_boxplot(aes(fill = exp)) +
+  theme_bw() +
+  theme(axis.title.x = element_blank()) +
+  ggtitle("%GC per gene weighted by expression")
+
+g3 <- ggplot(df_gene_gc_stat_top_genetypes, aes(filter, weighted_gc)) +
+  geom_boxplot(aes(fill = exp)) +
+  facet_wrap(~gene_biotype, scales = "free_y", nrow = 2) +
+  theme_custom() +
+  theme(axis.title.x = element_blank()) +
+  ggtitle("%GC per gene weighted by expression, top gene biotypes")
+
+grid.arrange(arrangeGrob(g1, g2, widths = c(1, 1)), g3, nrow = 2, heights = c(3, 4))
+```
+
+
+

@@ -1,0 +1,345 @@
+---
+title: "CEF antigen-activated CD8 cells"
+output:
+  html_notebook:
+    code_folding: hide
+    css: ~/Documents/common/utils/Rnotebook_style.css
+    theme: united
+    toc: yes
+    toc_float: no
+    urlcolor: blue
+  html_document:
+    code_folding: hide
+    css: ~/Documents/common/utils/Rnotebook_style.css
+    theme: united
+    toc: yes
+    toc_float: no
+    urlcolor: blue
+---
+```{r global_options, echo = FALSE, include = FALSE}
+knitr::opts_chunk$set(echo = T, warning = FALSE, message = FALSE,
+                      cache = FALSE, tidy = TRUE, size = "small")
+```
+
+```{r}
+source("~/Documents/common/utils/dataIO.R")
+source("~/Documents/common/utils/tophelpers.R")
+source("~/Documents/common/utils/common_utils.R")
+
+parse_stats <- function(df){
+  df %>%
+      melt(id = 1:2, variable.name = "metric") %>%
+      filter(!grepl("star.*on$", metric)) %>%
+      mutate(metric = as.character(metric),
+             value = gsub("%", "", value),
+             value = as.numeric(value),
+             value = ifelse(metric %in% c("riboPct", "mitoPct"), value/100, value),
+             exp = ifelse(expId == "EXPsmart3", "Benchmark", expId),
+             exp = gsub("EXP21000052_P", "EXP052-", exp),
+             exp = gsub("EXP21000210_P03", "EXP210-03", exp),
+             metric = ifelse(grepl("_", metric), metric, paste0("fastq_", metric)),
+             metric = gsub("picard", "picard::", metric)) %>%
+      separate(metric, c("source", "metric"), sep = "_", extra = "merge") %>%
+      filter(source != "biotype", !is.na(value))
+}
+
+df_metrics <- read_tsv("data/CEF_stats_complete.tsv") %>% parse_stats()
+df_metrics_rrna <- read_tsv("data_nofilter/CEF_nofilter_stats_complete.tsv") %>% parse_stats()
+df_metrics_rrnaonly <- read_tsv("../../yard/active/picard_ribo_BIOSC-30/out_CEF_rRNAonly/CEF_rRNAonly_stats_complete.tsv") %>% parse_stats()
+
+df_key <- df_metrics %>% select(metric) %>% unique()
+
+```
+
+
+# General reads alignment reads stat
+```{r fig.width=6, fig.height=1.5}
+targeted_metrics <- c("Numberofinputreads", "totalmappedreads%", "%ofchimericreads")
+
+df_metrics %>%
+  filter(metric %in% targeted_metrics) %>%
+  mutate(metric = gsub("of", " of ", metric),
+         metric = gsub("reads", " reads ", metric),
+         metric = gsub("mapped", " mapped ", metric),
+         metric = gsub("un mapped", "unmapped ", metric)) %>%
+  ggplot(aes(exp, value)) +
+  # geom_boxplot(aes(color = expId)) +
+  geom_jitter(aes(color = expId), width = 0.2, shape = 1, size = 2) +
+  facet_wrap(~metric, scales = "free_y") +
+  theme_bw()
+```
+
+```{r fig.width=6, fig.height=2}
+targeted_metrics <- c("Uniquelymappedreads%", "%ofreadsmappedtomultipleloci", "%ofreadsmappedtotoomanyloci",
+                      "%ofreadsunmappedtoomanymismatches", "%ofreadsunmappedtooshort", "%ofreadsunmappedother")
+
+df_metrics %>%
+  filter(metric %in% targeted_metrics) %>%
+  mutate(metric = gsub("of", " of ", metric),
+         metric = gsub("reads", " reads ", metric),
+         metric = gsub("mapped", "mapped ", metric),
+         metric = gsub("toomany", " too many ", metric),
+         metric = gsub("multiple", " multiple ", metric)) %>%
+  ggplot(aes(cellId, value, group = cellId)) +
+  geom_bar(stat = "identity", aes(fill = metric), position='stack') +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~expId, scales = "free_x", nrow = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) 
+```
+
+
+
+```{r fig.width=6, fig.height=1.5}
+df_metrics %>%
+  filter(grepl("RIME_BIAS", metric)) %>%
+  mutate(metric = gsub("of", " of ", metric),
+         metric = gsub("reads", " reads ", metric)) %>%
+  ggplot(aes(exp, value)) +
+  # geom_boxplot(aes(color = expId)) +
+  geom_jitter(aes(color = expId), width = 0.2, shape = 1, size = 2) +
+  facet_wrap(~metric, scales = "free_y") +
+  theme_bw()
+```
+
+# rRNA and mito content
+```{r fig.width=6, fig.height=1.5}
+targeted_metrics <- c("riboPct", "mitoPct", "chrMreadSegNum")
+df_metrics %>%
+  filter(metric %in% targeted_metrics) %>%
+  ggplot(aes(exp, value)) +
+  # geom_boxplot(aes(color = expId)) +
+  geom_jitter(aes(color = expId), width = 0.2, shape = 1, size = 2) +
+  facet_wrap(~metric, scales = "free_y") +
+  theme_bw()
+```
+
+# Alignment on gene body
+
+```{r fig.width=6, fig.height=3.5}
+targeted_metrics <- c("PCT_RIBOSOMAL_BASES", 
+                      "PCT_CODING_BASES", "PCT_UTR_BASES", "PCT_INTRONIC_BASES",
+                      "PCT_INTERGENIC_BASES")
+
+rbind(
+  df_metrics %>% mutate(run = "filtered"),
+  df_metrics_rrna %>% mutate(run = "with rRNA"),
+  df_metrics_rrnaonly %>% mutate(run = "rRNA only")
+) %>%
+  mutate(run = factor(run, levels = c("filtered", "with rRNA", "rRNA only"))) %>%
+  filter(metric %in% targeted_metrics) %>%
+  mutate(metric = gsub("PCT_", "% ", metric),
+         metric = gsub("_BASES", "", metric)) %>%
+  ggplot(aes(cellId, value, group = cellId)) +
+  geom_bar(stat = "identity", aes(fill = metric), position='stack') +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~run + expId, scales = "free_x", nrow = 3) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        strip.text.x = element_text(size = 12)) +
+  ggtitle("Distribution of aligned bases per cell, CEF dataset")
+```
+
+
+```{r fig.width=5, fig.height=2}
+targeted_metrics <- c("riboPct", "PCT_INTERGENIC_BASES", "Uniquelymappedreads%")
+
+g <- df_metrics %>%
+  filter(metric %in% targeted_metrics) %>%
+  mutate(value = ifelse(metric == "Uniquelymappedreads%", value/100, value),
+         metric = gsub("Uniquelymappedreads%", "uniquely mapped reads %", metric)) %>%
+  dcast(cellId + expId ~ metric, value.var = "value") %>%
+  left_join(df_gene_detected) 
+
+g1 <- ggplot(g) +
+  geom_point(aes(riboPct, PCT_INTERGENIC_BASES, color = `uniquely mapped reads %`)) +
+  scale_color_viridis() +
+  theme_bw() + no_legend()
+
+g2 <- ggplot(g) +
+  geom_point(aes(riboPct, pct_ribo_prot, color = `uniquely mapped reads %`)) +
+  scale_color_viridis() +
+  theme_bw()
+
+grid.arrange(g1, g2, nrow = 1, widths = c(1, 1.4))
+```
+
+
+
+```{r}
+mat <- Seurat::Read10X_h5("data/rsem_count_matrix.h5")
+mat_tpm <- Seurat::Read10X_h5("data/rsem_tpm_matrix.h5")
+
+df_gene_anno <- read_csv("~/Documents/common/resource//genome_anno/gene_symbol_GRCh38.csv") %>%
+  mutate(gene_id = ensembl_gene_id) %>%
+  select(gene_id, gene_symbol, gene_biotype, gene_gc_pct) %>%
+  filter(gene_biotype == "protein_coding") %>%
+  mutate(ribo = grepl("^RPS|^RPL", gene_symbol),
+         mito = grepl("^MT-", gene_symbol)
+  )
+         
+df_gene_detected <- data.frame(
+  cellId = colnames(mat),
+  num_genes = Matrix::colSums(mat > 0),
+  num_pt_genes = Matrix::colSums(mat[rownames(mat) %in% df_gene_anno$gene_symbol, ] > 0),
+  pct_ribo_prot =  Matrix::colSums(mat_tpm[rownames(mat) %in% filter(df_gene_anno, ribo)$gene_symbol, ])/ Matrix::colSums(mat_tpm),
+  pct_mito_prot =  Matrix::colSums(mat_tpm[rownames(mat) %in% filter(df_gene_anno, mito)$gene_symbol, ])/ Matrix::colSums(mat_tpm)
+)
+
+df_compare <- df_gene_detected %>%
+  filter(num_genes > 1000) %>%
+  left_join(df_metrics) %>%
+  filter(source != "rsem")
+
+df_compare_corr <- df_compare %>%
+  group_by(source, metric) %>%
+  mutate(stdev = sd(value)) %>%
+  filter(stdev > 0) %>%
+  summarise(pearson = cor(num_pt_genes, value, method = "pearson", use = "complete.obs"),
+            spearman = cor(num_pt_genes, value, method = "spearman", use = "complete.obs")) %>%
+  ungroup() %>%
+  mutate(pe_rank = rank(-pearson, ties.method = "min"),
+         sp_rank = rank(-spearman, ties.method = "min"),
+         rank = pe_rank + sp_rank)
+```
+# Metric radar
+```{r}
+targeted_metrics <- c("riboPct", "PCT_CODING_BASES", "PCT_INTRONIC_BASES",
+                      "PCT_INTERGENIC_BASES", "Uniquelymappedreads%")
+df_radar <- df_metrics %>%
+  filter(metric %in% targeted_metrics) %>%
+  dcast(cellId + expId ~ metric, value.var = "value") %>%
+  mutate(frac_uniq_mapping = `Uniquelymappedreads%`/100) %>%
+  select(-`Uniquelymappedreads%`) %>%
+  left_join(
+    df_gene_detected %>% select(-num_pt_genes) %>% mutate(num_genes = num_genes/5000)
+  ) %>%
+  melt(id = 1:2, variable.name = "metric")
+
+df_radar_bench <- df_radar %>% 
+  filter(expId == "EXPsmart3") %>%
+  group_by(metric) %>%
+  summarise(med = median(value))
+  
+```
+
+```{r fig.width=7, fig.height=2.5}
+ggplot(df_radar, aes(metric, value)) + 
+  geom_line(aes(color = expId, group = cellId)) +
+  geom_line(data = df_radar_bench, aes(metric, med, group = 1), color = "black", size = 1.5) +
+  coord_polar() +
+  facet_wrap(~expId, nrow = 1) +
+  theme_bw() +
+  no_legend() +
+  theme(strip.text.x = element_text(size = 14),
+        panel.border = element_blank(),
+        axis.title = element_blank(),
+        axis.text.x = element_text(size = 11, colour = "black"))
+```
+```{r fig.width=7, fig.height=4}
+df_radar %>%
+  group_by(metric) %>%
+  mutate(norm = (value - min(value))/(max(value) - min(value))) %>%
+  ggplot(aes(metric, norm)) + 
+  geom_line(aes(color = expId, group = cellId)) +
+  coord_polar() +
+  # facet_wrap(~expId, nrow = 1) +
+  theme_bw() +
+  theme(strip.text.x = element_text(size = 14),
+        panel.border = element_blank(),
+        axis.title = element_blank(),
+        axis.text.x = element_text(size = 11, colour = "black"))
+```
+
+# Metric heatmap
+```{r}
+mat_metrics <- df_metrics %>%
+  group_by(metric) %>%
+  summarise(median = median(value),
+         mad = mad(value)) %>%
+  filter(mad > 0) %>%
+  mutate(cv = mad/median) %>%
+  filter(cv > 0.1)
+
+df_metrics_meta <- df_metrics %>%
+  filter(metric %in% mat_metrics$metric) %>%
+  select(metric, source) %>%
+  unique() %>%
+  set_rownames(NULL) %>%
+  tibble::column_to_rownames("metric")
+
+df_cell_meta <- df_compare %>%
+  select(cellId, exp, num_genes, num_pt_genes) %>%
+  unique() %>%
+  arrange(num_pt_genes) %>%
+  set_rownames(NULL) %>%
+  tibble::column_to_rownames("cellId")
+  
+mat_metrics_norm <- df_metrics %>%
+  filter(metric %in% mat_metrics$metric) %>%
+  group_by(metric) %>%
+  mutate(norm = (value - quantile(value, 0.05))/(quantile(value, 0.95) - quantile(value, 0.05))) %>%
+  ungroup() %>%
+  mutate(z = scale(norm)[, 1],
+         z = ifelse(abs(z) > 3, NA, z)) %>%
+  acast(metric ~ cellId, value.var = "z")
+```
+
+```{r fig.width=8, fig.height=7}
+pheatmap::pheatmap(mat_metrics_norm[, rownames(df_cell_meta)], 
+                   show_colnames = F,
+                   cluster_cols = F,
+                   annotation_row = df_metrics_meta,
+                   annotation_col = df_cell_meta,
+                   fontsize = 15,
+                   fontsize_row = 10)
+```
+
+# Metrics correlated 
+```{r fig.width=6, fig.height=3.5}
+ggplot(df_compare_corr, aes(pearson, spearman)) +
+  geom_point(aes(color = source)) +
+  ggrepel::geom_text_repel(data = df_compare_corr %>% filter(rank < 30),
+                           aes(pearson, spearman, label = metric),
+                           size = 3) +
+  ggrepel::geom_text_repel(data = df_compare_corr %>% filter(rank > 170),
+                           aes(pearson, spearman, label = metric),
+                           size = 3) +
+  # xlim(-0.6, 0.7) +
+  # ylim(-0.6, 0.5) +
+  theme_bw() +
+  ggtitle("Correlation with Number of protein-coding genes detected")
+```
+```{r}
+DT::datatable(df_compare_corr %>% filter(rank < 25 | rank > 160) %>%
+                mutate(pearson = round(pearson, 3),
+                       spearman = round(spearman, 3)) %>%
+                arrange(-pearson),
+              options = list(pageLength = 10))
+```
+
+```{r fig.width=6, fig.height=2.5}
+targeted_metrics1 <- c("GC_NC_80_100", "PCT_CODING_BASES", 
+                      "NumberofsplicesTotal", "inputReadNum")
+targeted_metrics2 <- c("MEDIAN_INSERT_SIZE", "mitoPct", "Averagemappedlength", "PCT_PF_READS_ALIGNED")
+g1 <- df_compare %>%
+  filter(metric %in% targeted_metrics1) %>%
+  ggplot(aes(value, num_genes)) +
+  geom_point(aes(color = exp)) +
+  stat_smooth(method = "lm") +
+  facet_wrap(~metric, scales = "free_x", nrow = 1) +
+  theme_bw() 
+
+g2 <- df_compare %>%
+  filter(metric %in% targeted_metrics2) %>%
+  ggplot(aes(value, num_genes)) +
+  geom_point(aes(color = exp)) +
+  stat_smooth(method = "lm") +
+  facet_wrap(~metric, scales = "free_x", nrow = 1) +
+  theme_bw() 
+
+grid.arrange(g1, g2, nrow = 2)
+```
+
+

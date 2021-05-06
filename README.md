@@ -8,6 +8,6 @@ Custom analysis scripts for single-cell-related projects
 
 | Analysis ID | Project | Uploader | Description |
 |-------------|---------|----------|-------------|
-|             |         |          |             |
+|CEF_QC_analysis_BIOSC-6|      PACT-SMART   |     Li     |     General QC analysis for CEF and HEK datasets        |
 |             |         |          |             |
 |             |         |          |             |
