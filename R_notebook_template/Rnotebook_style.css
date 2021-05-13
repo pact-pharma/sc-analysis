@@ -1,0 +1,33 @@
+
+
+body{ /* Normal  */
+      font-size: 18px;
+  }
+td {  /* Table  */
+  font-size: 12px;
+}
+h1.title {
+  font-size: 28px;
+  font-weight: bold;
+}
+h1 { /* Header 1 */
+  font-size: 24px;
+}
+h2 { /* Header 2 */
+    font-size: 20px;
+}
+h3 { /* Header 3 */
+  font-size: 18px;
+}
+code.r{ /* Code block */
+    font-size: 14px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 12px;
+}
+
+.main-container {
+  max-width: 1000px !important;;
+  margin-left: auto;
+  margin-right: auto;
+}

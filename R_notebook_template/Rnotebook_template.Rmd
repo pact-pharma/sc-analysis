@@ -1,0 +1,28 @@
+---
+title: "Title"
+output:
+  html_notebook:
+    code_folding: hide
+    css: ./Rnotebook_style.css
+    theme: united
+    toc: yes
+    toc_float: no
+    urlcolor: blue
+  html_document:
+    code_folding: hide
+    css: ./Rnotebook_style.css
+    theme: united
+    toc: yes
+    toc_float: no
+    urlcolor: blue
+---
+```{r global_options, echo = FALSE, include = FALSE}
+knitr::opts_chunk$set(echo = T, warning = FALSE, message = FALSE,
+                      cache = FALSE, tidy = TRUE, size = "small")
+```
+
+```{r}
+source("load_libraries.R")
+
+
+```
