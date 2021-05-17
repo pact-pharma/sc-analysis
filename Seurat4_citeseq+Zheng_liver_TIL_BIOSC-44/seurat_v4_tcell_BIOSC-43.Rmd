@@ -1,0 +1,179 @@
+---
+title: "Reanalyze Seruat v4 cite-seq T cells"
+output:
+  html_notebook:
+    code_folding: hide
+    css: ~/Documents/common/utils/Rnotebook_style.css
+    theme: united
+    toc: yes
+    toc_float: no
+    urlcolor: blue
+  html_document:
+    code_folding: hide
+    css: ~/Documents/common/utils/Rnotebook_style.css
+    theme: united
+    toc: yes
+    toc_float: no
+    urlcolor: blue
+---
+```{r global_options, echo = FALSE, include = FALSE}
+knitr::opts_chunk$set(echo = T, warning = FALSE, message = FALSE,
+                      cache = FALSE, tidy = TRUE, size = "small")
+```
+
+```{r}
+source("~/Documents/common/utils/dataIO.R")
+source("~/Documents/common/utils/tophelpers.R")
+source("~/Documents/common/utils/common_utils.R")
+
+df_gene_anno <- read_tsv("~/Documents/common/resource/genome_anno/cellranger_GEX_features.tsv",
+                         col_names = c("gene_id", "gene_name", "ft")) %>%
+  group_by(gene_name) %>%
+  top_n(1, gene_id)
+
+obj_data <- SeuratDisk::LoadH5Seurat("seurat_v4_citeseq_full.h5seurat", 
+                                     assays = "counts",
+                                     reduction = c("pca", "apca", "wnn.umap"))
+
+df_meta <- obj_data@meta.data %>% 
+  to_df("Barcode") %>%
+  left_join(
+    extract_umap(obj_data, "wnn.umap")
+  )
+
+df_features <- bind_rows(
+  data.frame(gene_name = rownames(obj_data@assays$SCT@counts)) %>%
+    left_join(df_gene_anno), 
+  data.frame(gene_name = rownames(obj_data@assays$ADT@counts)) %>%
+    mutate(gene_id = gene_name,
+           ft = "Antibody Capture")
+) %>%
+  select(gene_id, gene_name, ft) %>%
+  mutate(gene_id = ifelse(is.na(gene_id), gene_name, gene_id),
+         ft = ifelse(is.na(ft), "Gene Expression", ft))
+```
+
+# Extract T cells
+```{r}
+# exclude gdT and dnT
+df_tcells <- df_meta %>%
+  filter(celltype.l1 %in% c("CD4 T", "CD8 T", "NK") | celltype.l2 == "MAIT") %>%
+  select(Barcode, contains("ADT"), contains("RNA"), contains("celltype"), donor, time, Phase, contains("umap")) %>%
+  separate(Barcode, c("lane", "cell_bc"), sep = "_", remove = F) %>%
+  mutate(gg = as.numeric(as.factor(lane))) %>%
+  unite(cell_bc, c(cell_bc, gg), sep = "-")
+  
+df_tcells_subsample <- df_tcells %>%
+  filter(nCount_RNA > 3000) %>%
+  group_by(celltype.l3) %>%
+  sample_n(min(n(), 500))
+
+
+  
+obj_tcells <- obj_data[, df_tcells$Barcode]
+saveRDS(obj_tcells, "seurat_v4_tcells_counts.rds")
+
+obj_tcells_ss <- obj_data[, df_tcells_subsample$Barcode]
+saveRDS(obj_tcells_ss, "seurat_v4_tcells_subsample_counts.rds")
+
+# obj_tcells <- readRDS("seurat_v4_tcells_counts.rds")
+# df_tcells_subsample <- read_csv("reanalyze_data_subsample/tcell_metadata.csv")
+
+df_umap <-  df_tcells_subsample %>% select(Barcode, cell_bc) %>%
+  left_join(
+    extract_umap(obj_tcells_ss, "aumap")
+  ) %>%
+  left_join(
+     extract_umap(obj_tcells_ss, "umap"), by = "Barcode", suffix = c(".ab", ".gex")
+  ) %>%
+  select(cell_bc, contains("umap")) 
+
+write_csv(df_umap, "reanalyze_data_subsample/unimodal_umap.csv")
+```
+
+# Sanity check of marker gene expression
+```{r fig.width=5, fig.height=1.5}
+Seurat::DefaultAssay(obj_tcells_ss) <- "ADT"
+
+gs <- Seurat::FeaturePlot(obj_tcells_ss, c("CD8", "CD4-1", "CD56-1"), reduction = "wnn.umap", combine = F)
+grid.arrange(grobs = gs, nrow = 1)
+```
+```{r fig.width=8, fig.height=4}
+# Seurat::DefaultAssay(obj_tcells_ss) <- "ADT"
+# 
+# obj_tcells_ss %<>% Seurat::NormalizeData()
+gs <- Seurat::VlnPlot(obj_tcells_ss, 
+                      c("CD8", "CD4-1", "CD56-1", "CD45RA", "CD45RO", "CD25"), 
+                      pt.size = 0,
+                      group="celltype.l2", 
+                      combine = F)
+
+gs[[1]] <- gs[[1]] + no_legend()
+gs[[2]] <- gs[[2]] + no_legend()
+gs[[4]] <- gs[[4]] + no_legend()
+gs[[5]] <- gs[[5]] + no_legend()
+
+grid.arrange(grobs = gs, nrow = 2, widths = c(1, 1, 1.4))
+
+```
+```{r fig.width=8, fig.height=4}
+Seurat::DefaultAssay(obj_tcells_ss) <- "SCT"
+# 
+obj_tcells_ss %<>% Seurat::NormalizeData()
+gs <- Seurat::VlnPlot(obj_tcells_ss, 
+                      c("CD8A", "CD4", "NCAM1", "CCR7", "IL7R", "GZMA"), 
+                      pt.size = 0,
+                      group="celltype.l2", 
+                      combine = F)
+
+gs[[1]] <- gs[[1]] + no_legend()
+gs[[2]] <- gs[[2]] + no_legend()
+gs[[4]] <- gs[[4]] + no_legend()
+gs[[5]] <- gs[[5]] + no_legend()
+
+grid.arrange(grobs = gs, nrow = 2, widths = c(1, 1, 1.4))
+
+```
+
+# Export feature-barcode matrix
+```{r}
+write_csc_matrix_h5 <- function(sparse_mat, h5_file){
+  rhdf5::h5write(sparse_mat@i, h5_file,"indices")
+  rhdf5::h5write(sparse_mat@p, h5_file,"indptr")
+  rhdf5::h5write(sparse_mat@x, h5_file, "data")
+  rhdf5::h5write(sparse_mat@Dim, h5_file, "shape")
+}
+
+```
+
+```{r}
+# Full T cells
+write_tsv(df_features, "reanalyze_data/features.tsv", col_names = F)
+write_tsv(df_tcells %>% select(cell_bc), "reanalyze_data/barcodes.tsv", col_names = F)
+write_csv(df_tcells, "reanalyze_data/tcell_metadata.csv")
+
+feat_bc_mat <- rbind(obj_tcells@assays$SCT@counts, obj_tcells@assays$ADT@counts) %>%
+  set_colnames(df_tcells$cell_bc)
+
+Matrix::writeMM(feat_bc_mat, "reanalyze_data/seurat_v4_fbm.mtx")
+```
+
+```{r}
+# subsampled T cells
+write_tsv(df_features, "reanalyze_data_subsample/features.tsv.gz", col_names = F)
+write_tsv(df_tcells_subsample %>% ungroup() %>% dplyr::select(cell_bc), 
+          "reanalyze_data_subsample/barcodes.tsv.gz", col_names = F)
+write_csv(df_tcells_subsample, "reanalyze_data_subsample/tcell_metadata.csv")
+
+feat_bc_mat <- rbind(obj_tcells_ss@assays$SCT@counts, obj_tcells_ss@assays$ADT@counts) %>%
+  set_colnames(df_tcells_subsample$cell_bc)
+
+
+# write csc matrix
+write_csc_matrix_h5(feat_bc_mat, "reanalyze_data_subsample/seurat_v4_fbm.h5")
+
+write_csc_matrix_h5(obj_tcells_ss@assays$SCT@counts, "classifier_data_subsample/gex_counts.h5")
+
+
+
+```
