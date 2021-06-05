@@ -11,4 +11,5 @@ Custom analysis scripts for single-cell-related projects
 |CEF_QC_analysis_BIOSC-6|      PACT-SMART   |     Li     |     General QC analysis for CEF and HEK datasets        |
 |R_notebook_template| generic |    Li   | Template for R markdown notebook     |
 |Seurat4_citeseq+Zheng_liver_TIL_BIOSC-44             | PACT-SMART        |  Li        | Parsing T cells from Seruat v4 cite-seq and interagation with Zheng et al Liver TIL dataset            |
+|celltype_classification__BIOSC-47|PACT-SMART|Li|cell type classifier based on hierarchical clustering of T cell subtypes of seurat v4 cite-seq dataset|
 |||||
